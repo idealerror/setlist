@@ -1,0 +1,177 @@
+# Venue setlist logger -- client configuration.
+#
+# Copy to config.toml and edit. Every value below is a default; delete any line
+# you do not want to override. Thresholds live here rather than in the code so
+# they can be retuned without a redeploy (spec 11).
+
+[venue]
+# Identifies this venue to the server. Unused until phase 3.
+slug = "venue"
+
+[audio]
+# "input"    a real capture device -- the venue's line feed into the Scarlett.
+#            A desk feed dramatically outperforms an open mic (spec 9.5).
+# "loopback" whatever this PC is playing. Development only.
+backend = "input"
+
+# Index from `list-devices`, or a name substring such as "Scarlett".
+# Empty selects the system default. A substring survives Windows renumbering
+# devices when something is plugged in or disabled.
+device = ""
+
+# 0 = automatic (1 channel for input, 2 for loopback).
+channels = 0
+
+# 0 = the device's native rate. Leave it at 0: WASAPI shared mode requires the
+# native rate, which is 48000 on the Scarlett, not 44100 (spec 9.3).
+samplerate = 0
+
+# Seconds of audio per recognition attempt. Shazam's own responses ask for
+# retryms = 12000, so going below ~12 costs accuracy.
+chunk_seconds = 12.0
+
+# Below this level the room counts as quiet and nothing is polled. The audio
+# level is the event detector (spec 2.1).
+gate_dbfs = -50.0
+
+# Consecutive capture failures before exiting so the supervisor restarts us.
+# USB interfaces drop (spec 9.2).
+max_consecutive_failures = 5
+
+# Watchdog (spec 9.2). A dead USB interface does not always raise an error --
+# the stream stays open and returns perfect digital silence forever, which no
+# capture-failure counter catches. A live input always has a noise floor, so a
+# level this far down for this long means the device is gone, not the room
+# quiet. Exits so the Scheduled Task restarts the process. 0 disables.
+watchdog_silence_minutes = 30.0
+watchdog_floor_dbfs = -90.0
+
+[poll]
+base_interval_s = 30.0
+
+# Adaptive backoff while the music does not change (spec 5.2). Resets to the
+# first step on any detected change or no-match.
+backoff_steps_s = [30.0, 60.0, 120.0]
+
+# +/- fraction applied to every sleep so calls never land on exact multiples
+# of a minute, which is what a rate limiter notices.
+jitter_pct = 0.20
+
+[change_detection]
+# Chroma comparison against the previous chunk (spec 5.1). Turning this off
+# roughly multiplies API usage by the number of polls per track.
+enabled = true
+
+# Cosine similarity above which the music is considered unchanged. Raise it if
+# distinct songs are being treated as the same one; lower it if every poll
+# looks like a change. Note that a long backoff compares chunks minutes apart,
+# so a verse and a chorus of one track can score below a strict threshold.
+similarity_threshold = 0.95
+
+# Spec 5.2 resets the poll interval on a no-match, so audio that is loud but
+# unrecognisable gets re-asked at the base interval indefinitely -- and spec 9.5
+# expects exactly that during DJ sets, where beatmatching and pitch-shifting
+# defeat fingerprinting. At a 30s base that is 2880 calls/day against a ceiling
+# of 500: tripped in about four hours, on the busiest nights.
+#
+# false = spec-faithful (every poll of unmatched audio calls the API).
+# true  = also back off while chroma says the audio has not changed since the
+#         no-match, since the recognizer has already answered for this audio.
+#         A chroma change still triggers immediate re-identification.
+#
+# Leave false for a first run so you can measure the real hit rate, then switch
+# to true if the ceiling is tripping before closing time.
+skip_repeat_nomatch = false
+
+# What each chunk is compared against.
+#
+# "previous"   spec 5.1 literally -- the immediately preceding chunk. This
+#              reference drifts. When a song changes mid-chunk that chunk is a
+#              blend of both tracks, and it then becomes the baseline, so the
+#              next chunk (entirely the new track) is compared against the
+#              blend rather than the old song. Every step stays above the
+#              threshold while the audio changes completely, and the incoming
+#              track is never logged. Measured in the field: 0.961 then 0.989
+#              across a real transition, missed outright.
+# "identified" compares against the chunk that produced the current match, so
+#              drift cannot accumulate. Costs an occasional extra call when a
+#              long track wanders from its own opening, which the local cache
+#              absorbs. Default, because a DJ set is a continuous crossfade --
+#              exactly the case "previous" loses.
+compare_to = "identified"
+
+# Never coast more than this many stable polls without re-identifying,
+# whatever the similarity says. A 12-dimension chroma vector is only
+# marginally discriminative on real music: two different tracks measured 0.900
+# while two chunks of one track measured 0.960, and no threshold separates
+# those. This bounds how long a missed transition can hide. Repeat tracks
+# return as free cache hits, so the cost falls as the cache fills. 0 disables.
+max_stable_polls = 4
+
+[cache]
+# Local constellation fingerprint cache (spec 5.3). The highest-value mechanism
+# for a weekday background playlist: a few hundred rotating tracks become
+# almost entirely cache hits within a couple of weeks.
+enabled = true
+
+# Aligned hashes required to declare a local hit. Raise if false positives
+# appear; lower if known tracks keep going to the API.
+min_aligned_hashes = 8
+
+n_fft = 2048
+hop_length = 512
+peak_neighborhood = 20
+peak_floor_db = -60.0
+fan_value = 15
+target_zone_min_dt = 1
+target_zone_max_dt = 100
+align_bin_s = 0.10
+
+# Bounds cache growth per track. About 9000 hashes come out of a single 12s
+# chunk, so this budget is effectively "how many windows of a track may be
+# cached" -- roughly four at this value. A cache hit needs a stored window that
+# overlaps wherever the next poll lands, and jittered polling spreads those
+# windows across the song over repeated plays, so raising this trades disk for
+# hit rate. Budget ~40 bytes per hash: 300 tracks at 40000 is about 500 MB.
+max_hashes_per_track = 40000
+
+[api]
+# Hard daily ceiling (spec 5.4). On trip, capture continues with cache-only
+# recognition rather than stopping.
+daily_ceiling = 500
+
+# Applied on HTTP 429, escalating through the list then holding at the cap.
+rate_limit_backoff_s = [60.0, 300.0, 900.0]
+rate_limit_cap_s = 3600.0
+
+[server]
+# Store-and-forward sync to the home server (spec 2.3). Leave url empty and the
+# client runs standalone -- capture never depends on any of this.
+#
+# Use the tailnet address. Do not port-forward (spec 3).
+url = ""
+token = ""
+
+# Spec 6 caps a batch at 500. Oldest first, so a partial sync during a flaky
+# connection still makes forward progress.
+batch_size = 500
+sync_interval_s = 60.0
+heartbeat_interval_s = 300.0
+request_timeout_s = 30.0
+
+# Escalating pause after a failed push, then held at the last value. A server
+# that is down for days costs nothing but a growing local queue.
+retry_backoff_s = [30.0, 120.0, 300.0, 900.0]
+verify_tls = true
+
+[storage]
+# Relative paths resolve against this file's directory.
+# Keep the database off a synced folder: OneDrive locks files mid-upload,
+# which surfaces as sporadic "database is locked".
+db_path = "setlist.db"
+
+[sessionize]
+# The same track reappearing after a longer gap is a new play (spec 8).
+# Changing this is safe -- rerun `sessionize` and plays are rebuilt from the
+# immutable detection log.
+play_gap_minutes = 15.0

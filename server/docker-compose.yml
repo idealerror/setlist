@@ -1,0 +1,78 @@
+# Runs inside a Proxmox LXC (spec 3).
+#
+# Nothing here is port-forwarded. BIND_ADDR should be the LXC's *tailnet*
+# address so the venue client reaches the API over Tailscale only. Metabase
+# stays on loopback and is published through a Cloudflare Tunnel for mobile.
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-setlist}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-setlist}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./backups:/backups
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-setlist}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    # Not published. Only the compose network reaches Postgres.
+
+  migrate:
+    build: .
+    restart: "no"
+    command: ["alembic", "upgrade", "head"]
+    environment:
+      SETLIST_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-setlist}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-setlist}
+    depends_on:
+      db:
+        condition: service_healthy
+
+  api:
+    build: .
+    restart: unless-stopped
+    environment:
+      SETLIST_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-setlist}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-setlist}
+      SETLIST_HOME_ASSISTANT_WEBHOOK_URL: ${SETLIST_HOME_ASSISTANT_WEBHOOK_URL:-}
+    ports:
+      # Set BIND_ADDR to the tailnet IP. Defaults to loopback so a missing
+      # .env cannot accidentally expose the API to the LAN.
+      - "${BIND_ADDR:-127.0.0.1}:8000:8000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  scheduler:
+    build: .
+    restart: unless-stopped
+    command: ["python", "-m", "app.scheduler"]
+    environment:
+      SETLIST_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-setlist}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-setlist}
+      SETLIST_HOME_ASSISTANT_WEBHOOK_URL: ${SETLIST_HOME_ASSISTANT_WEBHOOK_URL:-}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  metabase:
+    image: metabase/metabase:latest
+    restart: unless-stopped
+    environment:
+      MB_DB_TYPE: postgres
+      MB_DB_DBNAME: ${POSTGRES_DB:-setlist}
+      MB_DB_PORT: 5432
+      MB_DB_USER: ${POSTGRES_USER:-setlist}
+      MB_DB_PASS: ${POSTGRES_PASSWORD}
+      MB_DB_HOST: db
+    ports:
+      # Loopback only; reach it through the Cloudflare Tunnel.
+      - "127.0.0.1:3000:3000"
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  pgdata:

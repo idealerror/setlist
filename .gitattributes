@@ -1,0 +1,20 @@
+# Store every text file with LF in the repository, regardless of the platform
+# it was authored on.
+* text=auto
+
+# These run in the Linux container. A CRLF line ending on the shebang makes
+# bash fail with "bad interpreter", so force LF in the working tree too.
+*.sh text eol=lf
+Dockerfile text eol=lf
+*.yml text eol=lf
+*.toml text eol=lf
+
+# These only ever run on the venue PC.
+*.ps1 text eol=crlf
+*.bat text eol=crlf
+
+# Never munge binaries.
+*.png binary
+*.jpg binary
+*.wav binary
+*.db binary

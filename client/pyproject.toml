@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "venue-setlist-client"
+version = "0.3.0"
+description = "Passive setlist logger for a venue PC"
+readme = "README.md"
+license = { text = "MIT" }
+
+# Spec 9.1. shazamio-core publishes Windows wheels for cp39-cp312 only; on
+# 3.13+ pip falls back to the source tarball and attempts a Rust build that
+# fails on the MSVC linker. shazamio also pulls in pydub, which imports the
+# audioop module removed from the stdlib in 3.13.
+requires-python = ">=3.10,<3.13"
+
+dependencies = [
+    "numpy>=1.24,<3",
+    "librosa>=0.10",       # chroma change detection (spec 5.1)
+    "scipy>=1.10",         # peak picking for the fingerprint cache (spec 5.3)
+    "sounddevice>=0.5",    # real capture devices
+    "soundcard>=0.4",      # WASAPI loopback, which sounddevice cannot do
+    "shazamio>=0.7",       # recognition backend (spec 2.4)
+    "httpx>=0.27",         # store-and-forward sync (spec 2.3)
+]
+
+[project.scripts]
+setlist = "setlist.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["setlist*"]

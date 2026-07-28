@@ -1,0 +1,21 @@
+# Holds the server bearer token. Never commit it.
+config.toml
+.env
+
+# Machine-local tool state: contains absolute paths and session ids.
+.claude/
+
+# Local data. The detection log is the source of truth on the venue PC and
+# must not be version controlled.
+*.db
+*.db-wal
+*.db-shm
+*.csv
+
+ops/logs/
+server/backups/
+
+__pycache__/
+*.py[cod]
+.venv/
+venv/
