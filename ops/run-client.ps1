@@ -55,7 +55,13 @@ Get-ChildItem $LogDir -Filter "client-*.log" -ErrorAction SilentlyContinue |
     Where-Object { $_.LastWriteTime -lt (Get-Date).AddDays(-$KeepLogDays) } |
     Remove-Item -Force -ErrorAction SilentlyContinue
 
-$argList = @($PythonArgs, "-m", "setlist")
+# An absolute interpreter path needs no launcher selector, and passing one
+# ("-3.12") to python.exe would be read as a script name.
+if ($Python -match '\.exe$' -and (Test-Path $Python)) { $PythonArgs = "" }
+
+$argList = @()
+if ($PythonArgs) { $argList += $PythonArgs }
+$argList += @("-m", "setlist")
 if ($ConfigPath) { $argList += @("--config", $ConfigPath) }
 $argList += @("run", "--max-runtime", $MaxRuntimeSeconds)
 

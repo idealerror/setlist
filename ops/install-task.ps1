@@ -18,6 +18,11 @@ param(
     [string]$TaskName = "VenueSetlistClient",
     [string]$ConfigPath = "",
     [int]$MaxRuntimeSeconds = 21600,
+    [string]$Python = "py",
+    [string]$PythonArgs = "-3.12",
+    # Register even if the dependency check fails. Only useful if you are
+    # installing before the dependencies.
+    [switch]$SkipPreflight,
     [switch]$Uninstall
 )
 
@@ -38,7 +43,54 @@ if (-not $scriptDir) { $scriptDir = (Get-Location).Path }
 $runner = Join-Path $scriptDir "run-client.ps1"
 if (-not (Test-Path $runner)) { throw "Cannot find $runner" }
 
-$argument = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$runner`" -MaxRuntimeSeconds $MaxRuntimeSeconds"
+# Resolve the launcher to a concrete interpreter and bake the absolute path
+# into the task.
+#
+# `py -3.12` resolves through PATH, and a Scheduled Task does not inherit an
+# interactive shell's PATH. On a machine with more than one Python 3.12 that
+# silently selects a different interpreter -- one without the dependencies --
+# so the client runs perfectly by hand and dies instantly under the task.
+# Pinning the path we verified here removes the ambiguity entirely.
+if ($Python -match '\.exe$' -and (Test-Path $Python)) { $PythonArgs = "" }
+
+$probe = @()
+if ($PythonArgs) { $probe += $PythonArgs }
+$probe += @("-c", "import sys; print(sys.executable)")
+
+$exe = (& $Python @probe 2>$null | Select-Object -First 1)
+if (-not $exe -or -not (Test-Path $exe.Trim())) {
+    throw "Could not resolve '$Python $PythonArgs' to an interpreter. Pass -Python with a full path to python.exe."
+}
+$exe = $exe.Trim()
+Write-Host "Interpreter: $exe"
+
+if (-not $SkipPreflight) {
+    # -W ignore because shazamio imports pydub, which warns about missing
+    # ffmpeg on stderr. With $ErrorActionPreference = "Stop", *any* stderr
+    # output from a native command becomes a terminating error, so an
+    # unsuppressed warning would abort this script before it registers
+    # anything -- and an actual ImportError would surface as a PowerShell
+    # NativeCommandError rather than the helpful message below.
+    $prevEAP = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    & $exe -W ignore -c "import numpy, scipy, librosa, sounddevice, soundcard, shazamio, httpx" 2>$null
+    $depsOk = ($LASTEXITCODE -eq 0)
+    $ErrorActionPreference = $prevEAP
+
+    if (-not $depsOk) {
+        throw @"
+Dependencies are missing for that interpreter, so the task would fail at every
+restart. Install them first:
+
+    & "$exe" -m pip install -e "$(Split-Path -Parent $scriptDir)\client"
+
+Then re-run this script. Use -SkipPreflight to register anyway.
+"@
+    }
+    Write-Host "Preflight:   dependencies present"
+}
+
+$argument = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$runner`" -MaxRuntimeSeconds $MaxRuntimeSeconds -Python `"$exe`""
 if ($ConfigPath) { $argument += " -ConfigPath `"$ConfigPath`"" }
 
 $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument $argument
